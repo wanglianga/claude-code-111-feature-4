@@ -25,6 +25,8 @@ export type SessionStatus =
   | '已结账' // 体验结束完成结账
   | '已复盘' // 收集完评价/损耗/复盘
   | '已解散' // 人数不足等原因解散（触发退款）
+  | '待补位' // 开场前异常处置中：名额暂挂，可售/候补状态冻结保留
+  | '已改期' // 已迁移到其他场次（本体保留为事件凭证）
 /** 支付状态 */
 export type PayStatus = '未支付' | '已支付' | '部分退款' | '已退款'
 /** 工单类型 */
@@ -40,7 +42,7 @@ export type TicketType =
 /** 工单状态 */
 export type TicketStatus = '待处理' | '处理中' | '待店长审批' | '已解决' | '已驳回'
 /** 收支类型 */
-export type LedgerKind = '报名费收入' | '押金收入' | '押金退还' | '退款支出' | '换本差价' | '争议补偿'
+export type LedgerKind = '报名费收入' | '押金收入' | '押金退还' | '退款支出' | '换本差价' | '争议补偿' | '权益保留' | '权益核销' | '跨店结算'
 /** 道具状态 */
 export type PropStatus = '正常' | '轻微损耗' | '严重损耗' | '丢失'
 /** 角色身份 */
@@ -71,6 +73,7 @@ export interface Script {
 export interface Host {
   id: string
   name: string
+  storeId: string
   level: '初级主持' | '资深主持' | '金牌主持'
   /** 剧本熟练度 scriptId -> 0~5 */
   proficiency: Record<string, number>
@@ -84,8 +87,19 @@ export interface Host {
 export interface Room {
   id: string
   name: string
+  storeId: string
   capacity: number
   horrorSet: boolean // 是否恐怖实景房
+  /** 不可用时段（设备故障/被征用），开场键数组，跨店迁移时必须避开 */
+  downSlots: string[]
+}
+
+/** 门店 */
+export interface Store {
+  id: string
+  name: string
+  district: string
+  phone: string
 }
 
 /** 会员 */
@@ -103,6 +117,7 @@ export interface Player {
   name: string
   phone: string
   memberId?: string
+  gender: '男' | '女' | '不便透露'
   rolePreference: string // 角色偏好：C位/推理位/氛围位/随意
   acceptCrossGender: boolean // 是否接受反串
   isBirthday?: boolean
@@ -113,6 +128,10 @@ export interface Player {
   late?: boolean
   quit?: boolean // 临时退出
   assignedRole?: string // 分配到的剧本角色名
+  /** 可接受开场时间键（异常改期时采集/使用，空表示听从安排） */
+  acceptableSlots: string[]
+  /** 候补补位策略：同意自动补位 / 仅接受指定时段 */
+  waitlistMode: '自动补位' | '仅指定时段'
 }
 
 /** 预约单（玩家侧） */
@@ -160,6 +179,8 @@ export interface LedgerEntry {
   playerId?: string
   sessionId: string
   ticketId?: string
+  /** 改期方案执行时的幂等键：同一方案同一玩家不会重复退款 */
+  planId?: string
   memo: string
   operator: string
 }
@@ -202,6 +223,7 @@ export interface Review {
 /** 场次（门店排班生成） */
 export interface Session {
   id: string
+  storeId: string
   scriptId: string
   date: string // YYYY-MM-DD
   startKey: string // HH:mm
@@ -217,6 +239,10 @@ export interface Session {
   createdAt: string
   createdBy: string
   reviewDone?: boolean
+  /** 当前关联的异常处置单（处置中场次名额冻结，保留可售/候补状态） */
+  disruptionId?: string
+  /** 改期迁移完成后的去向 */
+  migratedTo?: { planId: string; newSessionId: string }
 }
 
 /** 主持复盘记录 */
@@ -228,4 +254,170 @@ export interface HostDebrief {
   note: string
   proficiencyDelta: number // 本场后建议熟练度调整 -1~+1
   at: string
+}
+
+// ============ 开场前异常处置（改期 / 候补 / 资源锁定） ============
+
+/** 剧本库存（盒装本，按门店）；库存为 0 的门店不能作为迁移目标 */
+export interface ScriptStock {
+  storeId: string
+  scriptId: string
+  copies: number // 可同时开的盒装本数量
+}
+
+/** 异常类型 */
+export type DisruptionType = '主持缺勤' | '场次延迟' | '房间不可用'
+
+/** 异常处置单状态 */
+export type DisruptionStatus =
+  | '异常已触发' // 资源受影响，等待店长发方案
+  | '方案计算中'
+  | '待玩家确认' // 方案已发布，倒计时中
+  | '部分已确认'
+  | '待执行迁移' // 确认达标，等待一次性锁定
+  | '已改期'
+  | '已退款关闭' // 全员全额退款关闭
+  | '已取消处置' // 资源恢复，撤回处置
+
+/** 候补条目 */
+export interface WaitlistEntry {
+  id: string
+  storeId: string
+  scriptId: string
+  date: string // 想补的日期
+  playerId: string
+  playerName: string
+  phone: string
+  memberId?: string
+  /** 公开优先级分（分值越高越靠前，构成规则在页面公开） */
+  score: number
+  scoreParts: { label: string; value: number }[]
+  groupKey: string // 同行/拼车组：同组一起进一起出
+  groupSize: number
+  mode: Player['waitlistMode'] // 自动补位 / 仅指定时段
+  acceptableSlots: string[] // 仅指定时段时使用
+  status: '排队中' | '已通知' | '已补位' | '超时未响应' | '已放弃'
+  /** 已通知倒计时截止时间 */
+  notifiedAt?: string
+  respondDeadline?: string
+  offeredSessionId?: string
+  createdAt: string
+  note?: string
+  /** 店长手工置顶（必须填写原因），排序时优先于分数 */
+  manualPin?: { at: string; by: string; reason: string }
+}
+
+/** 玩家对方案的确认状态 */
+export type PlanResponse = '待确认' | '已接受' | '仅指定时段' | '已拒绝' | '超时未响应'
+
+/** 方案类型 */
+export type PlanKind = '同日换场' | '跨店迁移' | '全额退款' | '保留权益待补位'
+
+/** 候选安排（方案计算的最小单元：去哪个场次） */
+export interface PlanTarget {
+  kind: PlanKind
+  /** 同日换场/跨店迁移 指向目标场次；退款/保留权益时为空 */
+  sessionId?: string
+  storeId?: string
+  roomId?: string
+  hostId?: string
+  startAt: string
+  /** 可解释：命中/冲突说明 */
+  reasons: string[]
+  conflicts: string[]
+  /** 该安排的角色预分配（playerId -> 角色名），用于角色人数/性别约束解释 */
+  roleAssign: Record<string, string>
+  /** 接受该安排的玩家（组）。未列入的玩家走拒绝分支（退款或保留权益） */
+  acceptedPlayerIds: string[]
+  rejectedPlayerIds: string[]
+  /** 权益变化摘要 */
+  entitlementDelta: string[]
+}
+
+/** 改期方案（一次计算可给多个候选；发布其中一个供玩家确认） */
+export interface ReschedulePlan {
+  id: string
+  disruptionId: string
+  kind: PlanKind
+  sessionId?: string
+  storeId?: string
+  roomId?: string
+  hostId?: string
+  startAt: string
+  status: '候选' | '已发布' | '已确认执行' | '已执行' | '执行失败已回滚' | '已作废'
+  createdAt: string
+  publishedAt?: string
+  confirmDeadline?: string
+  executedAt?: string
+  reasons: string[]
+  conflicts: string[]
+  roleAssign: Record<string, string>
+  responses: Record<string, PlanResponse> // playerId -> 状态
+  /** 执行/回滚留痕 */
+  executionNote?: string
+  /** 拒绝/超时玩家的处理方式 */
+  rejectPolicy: '全额退款' | '保留权益待补位'
+}
+
+/** 资源锁（确认迁移时对四类资源一次性锁定） */
+export interface ResourceLock {
+  id: string
+  disruptionId: string
+  planId: string
+  kind: '原场次名额' | '目标房间' | '主持人班次' | '剧本库存'
+  refId: string // roomId / hostId / sessionId / `${storeId}:${scriptId}`
+  storeId: string
+  startAt: string
+  status: '已锁定' | '锁定失败' | '已提交' | '已回滚'
+  detail: string
+  lockedAt: string
+}
+
+/** 权益变动日志（保留/核销，防重复退款与权益丢失） */
+export interface EntitlementLog {
+  id: string
+  at: string
+  playerId: string
+  playerName: string
+  kind: '保留' | '核销' | '退回'
+  amount: number
+  sessionId?: string
+  planId?: string
+  memo: string
+  operator: string
+}
+
+/** 场次事件时间线条目（异常触发→方案→确认→锁定→退款补偿→排班变更 统一流水） */
+export interface IncidentEvent {
+  id: string
+  at: string
+  scope: string // disruptionId 或 sessionId
+  sessionId?: string
+  actor: string
+  category: '异常触发' | '方案计算' | '玩家确认' | '资源锁定' | '退款补偿' | '排班变更' | '候补递补' | '系统'
+  action: string
+  level?: 'info' | 'warn' | 'ok' | 'error'
+}
+
+/** 异常处置单 */
+export interface Disruption {
+  id: string
+  sessionId: string
+  type: DisruptionType
+  detail: string
+  reason: string // 发起必填原因
+  raisedBy: string
+  raisedAt: string
+  status: DisruptionStatus
+  /** 候选方案 */
+  plans: ReschedulePlan[]
+  publishedPlanId?: string
+  /** 拒绝/超时玩家的默认处理 */
+  rejectPolicy: '全额退款' | '保留权益待补位'
+  /** 关联锁 */
+  lockIds: string[]
+  resolvedAt?: string
+  resolution?: string
+  /** 需人工介入事项 */
+  manualAlerts: string[]
 }

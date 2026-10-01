@@ -10,6 +10,9 @@ const KIND_TONE: Record<LedgerKind, 'green' | 'red' | 'gold' | 'blue' | 'amber'>
   退款支出: 'red',
   换本差价: 'amber',
   争议补偿: 'red',
+  权益保留: 'gold',
+  权益核销: 'blue',
+  跨店结算: 'blue',
 }
 
 export function LedgerPage() {
@@ -45,7 +48,7 @@ export function LedgerPage() {
 
       <div className="row" style={{ marginBottom: 10 }}>
         <select style={{ width: 150 }} value={kind} onChange={(e) => setKind(e.target.value)}>
-          {['全部', '报名费收入', '押金收入', '押金退还', '退款支出', '换本差价', '争议补偿'].map((k) => <option key={k}>{k}</option>)}
+          {['全部', '报名费收入', '押金收入', '押金退还', '退款支出', '换本差价', '争议补偿', '权益保留', '权益核销', '跨店结算'].map((k) => <option key={k}>{k}</option>)}
         </select>
         <select style={{ width: 320 }} value={sid} onChange={(e) => setSid(e.target.value)}>
           <option value="">全部场次</option>

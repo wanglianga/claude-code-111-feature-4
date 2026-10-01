@@ -1,11 +1,12 @@
 import { useMemo, useState } from 'react'
-import { useStore, sessionPlayers, sessionRisk } from '../store'
+import { useStore, sessionPlayers, sessionRisk, disruptionTimeline } from '../store'
 import type { Session, Player, PropStatus, TicketType } from '../types'
 import { scriptRoles } from '../seed'
 import { Badge, Modal, PayBadge, SessionBadge } from '../ui'
 
 const STEP: Session['status'][] = ['待成局', '已成局', '已签到', '角色已分', '道具已发', '进行中', '休息中', '已结账', '已复盘']
-const endish = ['已结账', '已复盘', '已解散']
+const endish = ['已结账', '已复盘', '已解散', '已改期']
+const frozen = (s: Session['status']) => s === '待补位' || s === '已改期'
 
 function StepsBar({ status }: { status: Session['status'] }) {
   const idx = STEP.indexOf(status)
@@ -20,8 +21,51 @@ function StepsBar({ status }: { status: Session['status'] }) {
   )
 }
 
-function RiskLine({ ss }: { ss: Session }) {
-  const r = sessionRisk(ss)
+/** 开场前异常处置横幅 + 聚合事件时间线 */
+function DisruptionBanner({ sessionId }: { sessionId: string }) {
+  const st = useStore()
+  const ds = st.disruptions.filter((d) => d.sessionId === sessionId)
+  const [showTl, setShowTl] = useState(false)
+  if (!ds.length) return null
+  return (
+    <div className="stack" style={{ marginBottom: 10 }}>
+      {ds.map((d) => {
+        const plan = d.plans.find((p) => p.id === d.publishedPlanId)
+        const active = !['已改期', '已退款关闭', '已取消处置'].includes(d.status)
+        return (
+          <div key={d.id} className={`notice ${active ? 'warn' : 'ok'}`} style={{ fontSize: 13 }}>
+            <div className="spread">
+              <div className="row">
+                <b>🚨 开场前异常处置单 {d.id}</b>
+                <Badge tone="red">{d.type}</Badge>
+                <Badge tone={active ? 'amber' : 'green'}>{d.status}</Badge>
+                {plan && <Badge tone="blue">{plan.kind} · {plan.status}</Badge>}
+              </div>
+              <div className="row">
+                <button className="btn sm" onClick={() => setShowTl((v) => !v)}>{showTl ? '收起时间线' : '查看场次事件时间线'}</button>
+                <button className="btn sm primary" onClick={() => window.dispatchEvent(new CustomEvent('nav:disruption', { detail: d.id }))}>前往异常处置中心 ↗</button>
+              </div>
+            </div>
+            <div className="small" style={{ marginTop: 4 }}>{d.reason}</div>
+            {showTl && (
+              <ul className="timeline" style={{ marginTop: 8 }}>
+                {disruptionTimeline(d.id).map((x, i) => (
+                  <li key={i}>
+                    <div className="t-at mono">{x.at.replace('T', ' ')}</div>
+                    <Badge tone={x.level === 'error' ? 'red' : x.level === 'ok' ? 'green' : x.level === 'warn' ? 'amber' : 'blue'}>{x.category}</Badge>
+                    <span className="t-actor">{x.actor}</span>{x.action}
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
+        )
+      })}
+    </div>
+  )
+}
+
+function RiskLine({ ss }: { ss: Session }) {  const r = sessionRisk(ss)
   return (
     <div className="tag-row">
       <Badge tone={r.formed ? 'green' : 'red'}>{r.formed ? '✅ 人数成局' : '❌ 人数未成局'}</Badge>
@@ -213,6 +257,8 @@ function SessionDetail({ ss, onClose }: { ss: Session; onClose: () => void }) {
       <StepsBar status={live.status} />
       <div style={{ margin: '10px 0' }}><RiskLine ss={live} /></div>
 
+      <DisruptionBanner sessionId={live.id} />
+
       <div className="grid cols-3" style={{ gap: 8 }}>
         <div className="notice" style={{ fontSize: 12 }}><b>房间</b><br />{room ? `${room.name}（${room.capacity}人${room.horrorSet ? '·恐怖实景' : ''}）` : '未安排'}</div>
         <div className="notice" style={{ fontSize: 12 }}><b>主持</b><br />{host ? `${host.name} · ${host.level} · 熟练度 ${host.proficiency[live.scriptId] ?? 0}/5 · 均分 ${host.reviewScore}` : '⚠ 空缺（见调班工单）'}</div>
@@ -281,10 +327,10 @@ function SessionDetail({ ss, onClose }: { ss: Session; onClose: () => void }) {
         <button className="btn gold" disabled={!['进行中', '休息中'].includes(live.status) || !canCheckout} onClick={() => st.checkoutSession(live.id)}>
           结账（退剩余押金{ss.depositCharged > 0 ? `，已扣损耗 ¥${live.depositCharged}` : ''}，状态→已结账）
         </button>
-        <button className="btn danger" disabled={endish.includes(live.status)} onClick={() => {
+        <button className="btn danger" disabled={endish.includes(live.status) || frozen(live.status)} title={frozen(live.status) ? '异常处置中的场次请在异常处置中心处理，不能直接解散' : undefined} onClick={() => {
           const reason = prompt('解散原因（将触发已支付玩家全额退款并释放房间/主持档期）：', '拼场人数不足，玩家同意改期')
           if (reason) st.disbandSession(live.id, reason)
-        }}>解散场次并全额退款</button>
+        }}>{frozen(live.status) ? '场次处置中（请到异常处置中心）' : '解散场次并全额退款'}</button>
         {!canCheckout && ['进行中', '休息中'].includes(live.status) && <span className="small muted">结账前请完成：{unpaid.length > 0 && `收款（${unpaid.map((p) => p.name).join('、')}）`}{live.propIssues.length > 0 && propsBack < live.propIssues.length && ' · 道具全部回收'}</span>}
       </div>
 
@@ -296,7 +342,7 @@ function SessionDetail({ ss, onClose }: { ss: Session; onClose: () => void }) {
 export function SessionsPage({ focusId, onConsumedFocus, hostOnly }: { focusId?: string; onConsumedFocus?: () => void; hostOnly?: boolean }) {
   const st = useStore()
   const [open, setOpen] = useState<string | undefined>(focusId)
-  const [date, setDate] = useState('2026-09-23')
+  const [date, setDate] = useState('2026-10-01')
   const [hostFilter, setHostFilter] = useState(st.hosts[0]?.id ?? '')
   const [statusFilter, setStatusFilter] = useState<string>('全部')
 
@@ -318,7 +364,7 @@ export function SessionsPage({ focusId, onConsumedFocus, hostOnly }: { focusId?:
           {hostOnly && <select style={{ width: 150 }} value={hostFilter} onChange={(e) => setHostFilter(e.target.value)}>{st.hosts.map((h) => <option key={h.id} value={h.id}>{h.name}</option>)}</select>}
           <input type="date" style={{ width: 160 }} value={date} onChange={(e) => setDate(e.target.value)} />
           <select style={{ width: 130 }} value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)}>
-            {['全部', '待成局', '已成局', '已签到', '角色已分', '道具已发', '进行中', '休息中', '已结账', '已复盘', '已解散'].map((x) => <option key={x}>{x}</option>)}
+            {['全部', '待成局', '已成局', '已签到', '角色已分', '道具已发', '进行中', '休息中', '已结账', '已复盘', '已解散', '待补位', '已改期'].map((x) => <option key={x}>{x}</option>)}
           </select>
         </div>
       </div>
@@ -345,6 +391,8 @@ export function SessionsPage({ focusId, onConsumedFocus, hostOnly }: { focusId?:
                   <Badge tone={risk.formed ? 'green' : 'red'}>{players.length} 人{risk.formed ? '·成局' : `·缺${script.minPlayers - players.length}`}</Badge>
                   <Badge tone={(host?.proficiency[ss.scriptId] ?? 0) >= 3 ? 'green' : 'amber'}>主持 {host?.name ?? '空缺'} {(host?.proficiency[ss.scriptId] ?? 0)}/5</Badge>
                   <Badge tone="blue">{room?.name ?? '未排房'}</Badge>
+                  {ss.status === '待补位' && <Badge tone="red">🚨 待补位·处置中</Badge>}
+                  {ss.status === '已改期' && <Badge tone="blue">已改期</Badge>}
                   <Badge tone={risk.paidCount === risk.total && risk.total > 0 ? 'green' : 'amber'}>付 {risk.paidCount}/{risk.total}</Badge>
                   {openTickets > 0 && <Badge tone="red">⚠ 工单 {openTickets}</Badge>}
                   {risk.refundAtRisk > 0 && <Badge tone="red">退款敞口 ¥{risk.refundAtRisk}</Badge>}

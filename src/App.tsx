@@ -8,6 +8,7 @@ import { DashboardPage } from './pages/DashboardPage'
 import { LedgerPage } from './pages/LedgerPage'
 import { ReviewPage } from './pages/ReviewPage'
 import { RecommendationsPage } from './pages/RecommendationsPage'
+import { DisruptionCenterPage } from './pages/DisruptionPages'
 
 type Role = 'player' | 'frontdesk' | 'host' | 'manager' | 'service'
 
@@ -27,6 +28,7 @@ const NAV: Record<Role, { key: string; label: string }[]> = {
   frontdesk: [
     { key: 'sessions', label: '场次推进（签到/分角/道具）' },
     { key: 'schedule', label: '排班成局台' },
+    { key: 'disruption', label: '异常处置中心' },
     { key: 'tickets', label: '异常工单' },
     { key: 'ledger', label: '收退款' },
   ],
@@ -36,6 +38,7 @@ const NAV: Record<Role, { key: string; label: string }[]> = {
   ],
   manager: [
     { key: 'dashboard', label: '店长看板' },
+    { key: 'disruption', label: '异常处置中心' },
     { key: 'schedule', label: '排班成局台' },
     { key: 'sessions', label: '场次推进' },
     { key: 'tickets', label: '工单审批' },
@@ -55,6 +58,7 @@ export default function App() {
   const resetDemo = useStore((s) => s.resetDemo)
   const [tab, setTab] = useState('library')
   const [focusSession, setFocusSession] = useState<string | undefined>()
+  const [focusDisruption, setFocusDisruption] = useState<string | undefined>()
 
   const nav = NAV[role]
   const active = nav.some((n) => n.key === tab) ? tab : nav[0].key
@@ -63,12 +67,27 @@ export default function App() {
     setTab('sessions')
     setFocusSession(id)
   }
+  const goDisruption = (id: string) => {
+    setTab('disruption')
+    setFocusDisruption(id)
+  }
 
   // 玩家预约成功后跳转「我的拼场」
   useEffect(() => {
     const handler = () => setTab('my')
     window.addEventListener('nav:my-bookings', handler)
     return () => window.removeEventListener('nav:my-bookings', handler)
+  }, [])
+
+  // 场次档案跳转异常处置中心
+  useEffect(() => {
+    const handler = (e: Event) => {
+      const id = (e as CustomEvent<string>).detail
+      setTab('disruption')
+      setFocusDisruption(id)
+    }
+    window.addEventListener('nav:disruption', handler)
+    return () => window.removeEventListener('nav:disruption', handler)
   }, [])
 
   return (
@@ -105,10 +124,11 @@ export default function App() {
         {active === 'schedule' && <ScheduleDeskPage />}
         {active === 'sessions' && <SessionsPage focusId={focusSession} onConsumedFocus={() => setFocusSession(undefined)} />}
         {active === 'tickets' && <TicketCenterPage onOpenSession={goSession} />}
-        {active === 'dashboard' && <DashboardPage onOpenSession={goSession} />}
+        {active === 'dashboard' && <DashboardPage onOpenSession={goSession} onOpenDisruption={goDisruption} />}
         {active === 'ledger' && <LedgerPage />}
         {active === 'review' && <ReviewPage role={role} />}
         {active === 'recommend' && <RecommendationsPage />}
+        {active === 'disruption' && <DisruptionCenterPage focusId={focusDisruption} onConsumedFocus={() => setFocusDisruption(undefined)} />}
       </main>
     </div>
   )

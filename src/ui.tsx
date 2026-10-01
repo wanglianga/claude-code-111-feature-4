@@ -1,5 +1,6 @@
 import React from 'react'
 import type { SessionStatus, TicketStatus, PayStatus } from './types'
+import { useStore } from './store'
 
 export const cn = (...xs: (string | false | undefined | null)[]) => xs.filter(Boolean).join(' ')
 
@@ -18,6 +19,8 @@ const sessionTone: Record<SessionStatus, 'amber' | 'green' | 'blue' | 'purple' |
   已结账: 'green',
   已复盘: 'green',
   已解散: 'red',
+  待补位: 'red',
+  已改期: 'blue',
 }
 export const SessionBadge = ({ s }: { s: SessionStatus }) => <Badge tone={sessionTone[s]}><span className="dot" />{s}</Badge>
 
@@ -63,4 +66,17 @@ export function useModal() {
   const open = (n: React.ReactNode) => setNode(n)
   const close = () => setNode(null)
   return { node, open, close }
+}
+
+/** 每秒刷新的时钟，同时驱动 store 的超时巡检（确认倒计时/候补超时实时变化） */
+export function useNow(intervalMs = 1000) {
+  const [nowMs, setNowMs] = React.useState(() => Date.now())
+  React.useEffect(() => {
+    const t = setInterval(() => {
+      setNowMs(Date.now())
+      useStore.getState().tick()
+    }, intervalMs)
+    return () => clearInterval(t)
+  }, [intervalMs])
+  return nowMs
 }

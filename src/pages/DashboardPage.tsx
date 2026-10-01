@@ -1,14 +1,19 @@
-import { useStore, sessionPlayers, sessionRisk, repurchaseRanking } from '../store'
+import { useStore, sessionPlayers, sessionRisk, repurchaseRanking, waitlistRanking } from '../store'
 import { Badge, SessionBadge, Stars } from '../ui'
 
-export function DashboardPage({ onOpenSession }: { onOpenSession: (id: string) => void }) {
+export function DashboardPage({ onOpenSession, onOpenDisruption }: { onOpenSession: (id: string) => void; onOpenDisruption?: (id: string) => void }) {
   const st = useStore()
   const active = st.sessions.filter((s) => !['已解散', '已复盘'].includes(s.status))
-  const todaySs = active.filter((s) => s.date === '2026-09-23')
-  const forming = todaySs.filter((s) => !sessionRisk(s).formed)
-  const noHost = todaySs.filter((s) => !s.hostId)
+  const todaySs = active.filter((s) => s.date === '2026-10-01')
+  const forming = todaySs.filter((s) => !sessionRisk(s).formed && s.status !== '待补位')
+  const noHost = todaySs.filter((s) => !s.hostId && s.status !== '待补位')
   const unpaidSs = todaySs.filter((s) => sessionPlayers(s.id).some((p) => !p.paid))
   const riskSs = todaySs.filter((s) => sessionRisk(s).refundAtRisk > 0 || sessionRisk(s).openTickets.length > 0)
+  const activeDisruptions = st.disruptions.filter((d) =>
+    !['已改期', '已退款关闭', '已取消处置'].includes(d.status) &&
+    st.sessions.find((x) => x.id === d.sessionId)?.date === '2026-10-01')
+  const pendingLocks = st.locks.filter((l) => l.status === '锁定失败' || l.status === '已回滚').slice(0, 6)
+  const todayWait = waitlistRanking('st1').filter((w) => w.date === '2026-10-01')
 
   const todayRevenue = st.ledger
     .filter((l) => l.sessionId && st.sessions.find((x) => x.id === l.sessionId)?.date === '2026-09-23')
@@ -25,15 +30,48 @@ export function DashboardPage({ onOpenSession }: { onOpenSession: (id: string) =
 
   return (
     <div>
-      <div className="section-title" style={{ marginTop: 0 }}>📊 店长看板 · 2026-09-23</div>
-      <div className="muted small" style={{ marginBottom: 10 }}>一屏掌握：人数是否成局、主持是否熟练、房间是否空闲、玩家是否已支付、退款风险敞口。</div>
+      <div className="section-title" style={{ marginTop: 0 }}>📊 店长看板 · 2026-10-01</div>
+      <div className="muted small" style={{ marginBottom: 10 }}>一屏掌握：人数是否成局、主持是否熟练、房间是否空闲、玩家是否已支付、退款风险敞口、开场前异常处置与候补递补。</div>
 
       <div className="grid cols-4">
-        <div className="stat"><div className="v">{todaySs.length}</div><div className="l">当日场次</div><div className="sub muted">{forming.length} 场人数未成局</div></div>
-        <div className="stat"><div className="v" style={{ color: noHost.length ? 'var(--red)' : 'var(--green)' }}>{noHost.length}</div><div className="l">主持空缺场次</div><div className="sub muted">{todaySs.filter((s) => s.hostId && (st.hosts.find((h) => h.id === s.hostId)?.proficiency[s.scriptId] ?? 0) < 3).length} 场熟练度不足</div></div>
-        <div className="stat"><div className="v" style={{ color: unpaidSs.length ? 'var(--amber)' : 'var(--green)' }}>{unpaidSs.length}</div><div className="l">存在未支付玩家的场次</div></div>
+        <div className="stat"><div className="v">{todaySs.length}</div><div className="l">当日场次</div><div className="sub muted">{forming.length} 场人数未成局 · {todaySs.filter((s) => s.status === '待补位').length} 场待补位</div></div>
+        <div className="stat"><div className="v" style={{ color: activeDisruptions.length ? 'var(--red)' : 'var(--green)' }}>{activeDisruptions.length}</div><div className="l">异常处置中</div><div className="sub muted">{activeDisruptions.filter((d) => ['待玩家确认', '部分已确认', '待执行迁移'].includes(d.status)).length} 单待玩家确认/执行</div></div>
+        <div className="stat"><div className="v" style={{ color: todayWait.some((w) => w.status === '已通知') ? 'var(--amber)' : 'var(--green)' }}>{todayWait.filter((w) => w.status === '已通知').length}</div><div className="l">候补通知倒计时中</div><div className="sub muted">队列共 {todayWait.length} 人</div></div>
         <div className="stat"><div className="v amt-neg">¥{refundExposure}</div><div className="l">退款风险敞口（已付可能退）</div><div className="sub" style={{ color: 'var(--green)' }}>当日流水净额 ¥{todayRevenue}</div></div>
       </div>
+
+      {activeDisruptions.length > 0 && (
+        <div className="card" style={{ marginTop: 14, borderColor: '#7a3747' }}>
+          <div className="card-title-row"><h3 style={{ margin: 0 }}>🚨 开场前异常 · 需人工介入（点击进入处置）</h3></div>
+          <div className="stack" style={{ gap: 6 }}>
+            {activeDisruptions.map((d) => {
+              const ss = st.sessions.find((x) => x.id === d.sessionId)!
+              const script = st.scripts.find((x) => x.id === ss.scriptId)!
+              const plan = d.plans.find((p) => p.id === d.publishedPlanId)
+              return (
+                <div key={d.id} className="notice warn clickable" style={{ cursor: 'pointer' }} onClick={() => onOpenDisruption?.(d.id)}>
+                  <div className="spread">
+                    <div className="row">
+                      <Badge tone="red">{d.type}</Badge>
+                      <b>《{script.name}》{ss.startKey}</b>
+                      <Badge tone="amber">{d.status}</Badge>
+                      {plan && <Badge tone="blue">{plan.kind} · {plan.status}</Badge>}
+                    </div>
+                    <span className="small muted mono">{d.id}</span>
+                  </div>
+                  <div className="small" style={{ marginTop: 4 }}>{d.reason}</div>
+                  {d.manualAlerts.length > 0 && <ul className="small" style={{ margin: '6px 0 0', paddingLeft: 18 }}>{d.manualAlerts.map((a, i) => <li key={i}>{a}</li>)}</ul>}
+                </div>
+              )
+            })}
+          </div>
+        </div>
+      )}
+      {pendingLocks.length > 0 && (
+        <div className="notice warn" style={{ marginTop: 10, fontSize: 12.5 }}>
+          🔒 最近有 {st.locks.filter((l) => l.status === '锁定失败' || l.status === '已回滚').length} 次资源锁定失败/回滚（并发抢占被系统整体回滚，未产生超卖或重复退款），请到异常处置中心重发方案。
+        </div>
+      )}
 
       <div className="grid cols-2" style={{ marginTop: 14 }}>
         <div className="card">
