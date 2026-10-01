@@ -1,6 +1,7 @@
 import { useMemo, useState } from 'react'
 import { useStore } from '../store'
 import type { Script } from '../types'
+import { DEMO_DATE } from '../seed'
 import { Badge } from '../ui'
 
 function ProfMeter({ v }: { v: number }) {
@@ -14,13 +15,14 @@ function ProfMeter({ v }: { v: number }) {
 
 export function ScheduleDeskPage() {
   const st = useStore()
-  const [date, setDate] = useState('2026-09-23')
+  const [date, setDate] = useState(DEMO_DATE)
+  const [storeId, setStoreId] = useState('st1')
   const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null)
 
-  // 拼场池：待拼场预约，按 剧本+开场 聚合
+  // 拼场池：待拼场预约，按 门店 + 剧本+开场 聚合
   const pools = useMemo(() => {
     const map = new Map<string, { script: Script; startAt: string; startKey: string; count: number; ids: string[]; modes: string[] }>()
-    st.bookings.filter((b) => b.status === '待拼场' && b.expectedStart.startsWith(date)).forEach((b) => {
+    st.bookings.filter((b) => b.status === '待拼场' && b.storeId === storeId && b.expectedStart.startsWith(date)).forEach((b) => {
       const key = `${b.scriptId}|${b.expectedStart}`
       const script = st.scripts.find((s) => s.id === b.scriptId)!
       const cur = map.get(key) ?? { script, startAt: b.expectedStart, startKey: b.expectedStart.slice(11), count: 0, ids: [], modes: [] }
@@ -30,24 +32,29 @@ export function ScheduleDeskPage() {
       map.set(key, cur)
     })
     return Array.from(map.values())
-  }, [st.bookings, st.scripts, date])
+  }, [st.bookings, st.scripts, date, storeId])
 
   const generate = (scriptId: string, startAt: string, mode: '拼场' | '包场' | '生日局') => {
-    const r = st.generateSession(scriptId, startAt.slice(0, 10), startAt.slice(11), mode)
+    const r = st.generateSession(scriptId, startAt.slice(0, 10), startAt.slice(11), mode, storeId)
     if (typeof r === 'object') setMsg({ ok: false, text: r.error })
     else setMsg({ ok: true, text: `场次 ${r} 已生成：系统按容量匹配了房间，主持按「档期空闲 → 熟练度优先」自动选派。` })
   }
 
-  const pendingSessions = st.sessions.filter((s) => s.status === '待成局' || (s.status === '已成局' && s.date === date))
+  const pendingSessions = st.sessions.filter((s) => (s.status === '待成局' || (s.status === '已成局' && s.date === date)) && s.storeId === storeId)
 
   return (
     <div>
       <div className="spread">
         <div>
           <div className="section-title" style={{ marginTop: 0 }}>🧭 排班成局台</div>
-          <div className="muted small">系统根据 <b>拼场人数（成局区间）、房间容量与占用、主持档期与剧本熟练度</b> 生成场次；主持全员无档期或熟练度不足会自动开工单。</div>
+          <div className="muted small">系统根据 <b>拼场人数（成局区间）、房间容量与占用、主持档期与剧本熟练度、盒装库存</b> 生成场次；主持全员无档期或熟练度不足会自动开工单。</div>
         </div>
-        <label className="field" style={{ margin: 0, width: 170 }}><span>排班日期</span><input type="date" value={date} onChange={(e) => setDate(e.target.value)} /></label>
+        <div className="row">
+          <select style={{ width: 180 }} value={storeId} onChange={(e) => setStoreId(e.target.value)}>
+            {st.stores.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
+          </select>
+          <label className="field" style={{ margin: 0, width: 170 }}><span>排班日期</span><input type="date" value={date} onChange={(e) => setDate(e.target.value)} /></label>
+        </div>
       </div>
 
       {msg && <div className={`notice ${msg.ok ? 'ok' : 'warn'}`} style={{ margin: '10px 0' }}>
@@ -60,8 +67,8 @@ export function ScheduleDeskPage() {
       <div className="grid cols-2">
         {pools.map((p) => {
           const formed = p.count >= p.script.minPlayers
-          const hosts = st.eligibleHosts(p.script.id, p.startAt)
-          const rooms = st.eligibleRooms(p.script.id, p.startAt)
+          const hosts = st.eligibleHosts(p.script.id, p.startAt, storeId)
+          const rooms = st.eligibleRooms(p.script.id, p.startAt, storeId)
           return (
             <div key={`${p.script.id}-${p.startAt}`} className="card">
               <div className="spread">
@@ -96,8 +103,8 @@ export function ScheduleDeskPage() {
         {pendingSessions.map((ss) => {
           const script = st.scripts.find((x) => x.id === ss.scriptId)!
           const head = st.bookings.filter((b) => b.sessionId === ss.id).reduce((n, b) => n + b.playersCount, 0)
-          const hosts = st.eligibleHosts(ss.scriptId, ss.startAt)
-          const rooms = st.eligibleRooms(ss.scriptId, ss.startAt)
+          const hosts = st.eligibleHosts(ss.scriptId, ss.startAt, ss.storeId)
+          const rooms = st.eligibleRooms(ss.scriptId, ss.startAt, ss.storeId)
           const curHost = st.hosts.find((h) => h.id === ss.hostId)
           const curRoom = st.rooms.find((r) => r.id === ss.roomId)
           return (
@@ -112,13 +119,13 @@ export function ScheduleDeskPage() {
                 <span className="small">{head} 人 · 成局线 {script.minPlayers}-{script.maxPlayers}</span>
               </div>
               <div className="grid cols-2" style={{ marginTop: 10 }}>
-                <label className="field" style={{ margin: 0 }}><span>房间（容量 ≥ {script.minPlayers}，排除时段冲突）</span>
-                  <select value={ss.roomId ?? ''} onChange={(e) => st.assignRoom(ss.id, e.target.value)}>
+                <label className="field" style={{ margin: 0 }}><span>房间（容量 ≥ {script.minPlayers}，排除时段冲突/故障）</span>
+                  <select value={ss.roomId ?? ''} onChange={(e) => { const r = st.assignRoom(ss.id, e.target.value); if (!r.ok) { alert(`调整被拦截：${r.error}`) } }}>
                     {[...(curRoom ? [curRoom] : []), ...rooms].map((r) => <option key={r.id} value={r.id}>{r.name}（{r.capacity} 人{curRoom?.id === r.id ? '· 当前' : ''}）</option>)}
                   </select>
                 </label>
                 <label className="field" style={{ margin: 0 }}><span>主持（档期空闲，熟练度优先）</span>
-                  <select value={ss.hostId ?? ''} onChange={(e) => st.assignHost(ss.id, e.target.value)}>
+                  <select value={ss.hostId ?? ''} onChange={(e) => { const r = st.assignHost(ss.id, e.target.value); if (!r.ok) alert(`调整被拦截：${r.error}`) }}>
                     <option value="">— 暂无主持，触发调班工单 —</option>
                     {[...(curHost && !hosts.some((h) => h.id === curHost.id) ? [curHost] : []), ...hosts].map((h) => (
                       <option key={h.id} value={h.id}>{h.name} · {h.level} · 熟练度 {(h.proficiency[ss.scriptId] ?? 0)}/5 · 均分 {h.reviewScore}</option>

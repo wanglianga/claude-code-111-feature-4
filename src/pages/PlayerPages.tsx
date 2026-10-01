@@ -2,6 +2,7 @@ import { useMemo, useState } from 'react'
 import { useStore, memberDiscount } from '../store'
 import type { Script, Booking } from '../types'
 import { Badge, Modal, Stars } from '../ui'
+import { MyPlanProposals } from './PlayerDisruptionPages'
 
 const horrorTone = (h: Script['horror']): 'green' | 'amber' | 'red' | 'purple' =>
   h === '不恐怖' ? 'green' : h === '微恐' ? 'amber' : h === '中恐' ? 'red' : 'purple'
@@ -210,7 +211,7 @@ export function PlayerLibraryPage() {
 }
 
 export function MyBookingsPage() {
-  const { bookings, scripts, sessions, cancelBooking } = useStore()
+  const { bookings, scripts, sessions, stores, cancelBooking } = useStore()
   const mine = bookings.slice(0, 50)
   return (
     <div>
@@ -221,15 +222,19 @@ export function MyBookingsPage() {
         {mine.map((b) => {
           const s = scripts.find((x) => x.id === b.scriptId)!
           const ss = b.sessionId ? sessions.find((x) => x.id === b.sessionId) : undefined
+          const store = b.storeId ? stores.find((x) => x.id === b.storeId) : undefined
           const paid = b.players.filter((p) => p.paid).length
           return (
             <div key={b.id} className="card">
               <div className="spread">
                 <div className="row">
                   <h3 style={{ margin: 0 }}>《{s.name}》</h3>
+                  {store && <Badge tone="blue">{store.shortName}</Badge>}
                   <Badge tone="purple">{b.mode}</Badge>
                   {b.status === '待拼场' && <Badge tone="amber">⏳ 待拼场</Badge>}
                   {b.status === '已成局' && <Badge tone="green">🎉 已成局</Badge>}
+                  {b.status === '候补中' && <Badge tone="blue">📋 候补中</Badge>}
+                  {b.status === '已改期' && <Badge tone="green">↪ 已改期迁移</Badge>}
                   {b.status === '已取消' && <Badge tone="red">已取消/退款</Badge>}
                 </div>
                 <div className="muted small mono">{b.expectedStart.replace('T', ' ')}</div>
@@ -244,7 +249,9 @@ export function MyBookingsPage() {
               </div>
               {ss && <div className="notice info" style={{ marginTop: 8, fontSize: 12 }}>
                 已归入场次 <b className="mono">{ss.id}</b> · 状态：{ss.status} · 开场 {ss.startKey}
+                {ss.status === '改期待补' && '（原场次名额继续可售/可候补，你的权益未受影响，等待门店补位安排）'}
               </div>}
+              <MyPlanProposals bookingId={b.id} />
               <div className="muted small" style={{ marginTop: 6 }}>退款规则：{s.refundRule}</div>
               {b.status === '待拼场' && (
                 <div className="row" style={{ marginTop: 8 }}>

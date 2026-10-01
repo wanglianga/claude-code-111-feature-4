@@ -1,13 +1,20 @@
 import { useMemo, useState } from 'react'
 import { useStore, sessionPlayers, sessionRisk } from '../store'
 import type { Session, Player, PropStatus, TicketType } from '../types'
-import { scriptRoles } from '../seed'
+import { scriptRoles, DEMO_DATE } from '../seed'
 import { Badge, Modal, PayBadge, SessionBadge } from '../ui'
 
 const STEP: Session['status'][] = ['待成局', '已成局', '已签到', '角色已分', '道具已发', '进行中', '休息中', '已结账', '已复盘']
 const endish = ['已结账', '已复盘', '已解散']
 
 function StepsBar({ status }: { status: Session['status'] }) {
+  if (status === '改期待补') {
+    return (
+      <div className="steps">
+        <span className="step cur">⚠ 改期待补（名额继续可售/可候补，资源已释放，权益已平移或保留）</span>
+      </div>
+    )
+  }
   const idx = STEP.indexOf(status)
   return (
     <div className="steps">
@@ -194,6 +201,21 @@ function SessionDetail({ ss, onClose }: { ss: Session; onClose: () => void }) {
   const propsBack = live.propIssues.filter((p) => p.returned).length
   const [interrupt, setInterrupt] = useState(live.hostInterruptNote ?? '')
   const tickets = st.tickets.filter((t) => t.sessionId === live.id)
+  const openCase = st.cases.find((c) => c.sessionId === live.id && !['已改期', '已退款', '已保留权益', '已关闭'].includes(c.status))
+
+  const quickDisruption = () => {
+    const type = (prompt('异常类型：1=主持缺勤  2=场次延迟  3=房间不可用（输入 1/2/3）', '1') ?? '') as string
+    const map = { '1': '主持缺勤', '2': '场次延迟', '3': '房间不可用' } as const
+    const t = map[type as '1' | '2' | '3']
+    if (!t) return
+    const title = t === '主持缺勤' ? '主持人临时缺勤，开场前无人主持'
+      : t === '场次延迟' ? '场次延迟，无法按原定时间开场'
+        : '房间故障/被占用，原定房间不可用'
+    const detail = prompt('情况说明：', t === '主持缺勤' ? '主持突发请假/失联。' : t === '场次延迟' ? '前序场次拖堂，预计延迟开场。' : '房间设施故障，工程抢修中。')
+    if (detail === null) return
+    st.raiseDisruption({ sessionId: live.id, type: t, title, detail, raisedBy: '值班店长' })
+    alert('已登记异常并冻结原场次名额，请切到「异常改期中心」计算方案。')
+  }
 
   const canCheckout = unpaid.length === 0 && propsBack === live.propIssues.length
   const nextLabel: Partial<Record<Session['status'], string>> = {
@@ -212,6 +234,13 @@ function SessionDetail({ ss, onClose }: { ss: Session; onClose: () => void }) {
     }>
       <StepsBar status={live.status} />
       <div style={{ margin: '10px 0' }}><RiskLine ss={live} /></div>
+      <div className="row" style={{ marginBottom: 8 }}>
+        <Badge tone="blue">{st.stores.find((x) => x.id === live.storeId)?.shortName}</Badge>
+        {live.copyId && <Badge tone="purple">盒装 {st.copies.find((c) => c.id === live.copyId)?.code}</Badge>}
+        {openCase
+          ? <button className="btn danger sm" onClick={() => window.dispatchEvent(new Event('nav:disruption'))}>🚨 异常单处置中：{openCase.type}（打开异常改期中心）</button>
+          : <button className="btn sm" onClick={quickDisruption}>🚨 登记开场前异常（缺勤/延迟/房间不可用）</button>}
+      </div>
 
       <div className="grid cols-3" style={{ gap: 8 }}>
         <div className="notice" style={{ fontSize: 12 }}><b>房间</b><br />{room ? `${room.name}（${room.capacity}人${room.horrorSet ? '·恐怖实景' : ''}）` : '未安排'}</div>
@@ -296,15 +325,17 @@ function SessionDetail({ ss, onClose }: { ss: Session; onClose: () => void }) {
 export function SessionsPage({ focusId, onConsumedFocus, hostOnly }: { focusId?: string; onConsumedFocus?: () => void; hostOnly?: boolean }) {
   const st = useStore()
   const [open, setOpen] = useState<string | undefined>(focusId)
-  const [date, setDate] = useState('2026-09-23')
+  const [date, setDate] = useState(DEMO_DATE)
+  const [storeFilter, setStoreFilter] = useState('')
   const [hostFilter, setHostFilter] = useState(st.hosts[0]?.id ?? '')
   const [statusFilter, setStatusFilter] = useState<string>('全部')
 
   const list = useMemo(() => st.sessions
     .filter((s) => s.date === date || date === '')
+    .filter((s) => (storeFilter ? s.storeId === storeFilter : true))
     .filter((s) => (hostOnly ? s.hostId === hostFilter : true))
     .filter((s) => (statusFilter === '全部' ? true : s.status === statusFilter))
-    .sort((a, b) => a.startAt.localeCompare(b.startAt)), [st.sessions, date, hostOnly, hostFilter, statusFilter])
+    .sort((a, b) => a.startAt.localeCompare(b.startAt)), [st.sessions, date, storeFilter, hostOnly, hostFilter, statusFilter])
 
   const opened = open ? st.sessions.find((s) => s.id === open) : undefined
   return (
@@ -315,10 +346,14 @@ export function SessionsPage({ focusId, onConsumedFocus, hostOnly }: { focusId?:
           <div className="muted small">前台签到 → 角色分配 → 道具发放/押金 → 主持开场 → 中途休息 → 结账复盘；迟到、退出、换本、不适、争议全部归到场次工单。</div>
         </div>
         <div className="row">
+          {!hostOnly && <select style={{ width: 150 }} value={storeFilter} onChange={(e) => setStoreFilter(e.target.value)}>
+            <option value="">全部门店</option>
+            {st.stores.map((s) => <option key={s.id} value={s.id}>{s.shortName}</option>)}
+          </select>}
           {hostOnly && <select style={{ width: 150 }} value={hostFilter} onChange={(e) => setHostFilter(e.target.value)}>{st.hosts.map((h) => <option key={h.id} value={h.id}>{h.name}</option>)}</select>}
           <input type="date" style={{ width: 160 }} value={date} onChange={(e) => setDate(e.target.value)} />
           <select style={{ width: 130 }} value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)}>
-            {['全部', '待成局', '已成局', '已签到', '角色已分', '道具已发', '进行中', '休息中', '已结账', '已复盘', '已解散'].map((x) => <option key={x}>{x}</option>)}
+            {['全部', '待成局', '已成局', '改期待补', '已签到', '角色已分', '道具已发', '进行中', '休息中', '已结账', '已复盘', '已解散'].map((x) => <option key={x}>{x}</option>)}
           </select>
         </div>
       </div>
@@ -337,6 +372,7 @@ export function SessionsPage({ focusId, onConsumedFocus, hostOnly }: { focusId?:
               <div className="spread">
                 <div className="row">
                   <b>《{script.name}》</b>
+                  <Badge tone="blue">{st.stores.find((x) => x.id === ss.storeId)?.shortName}</Badge>
                   <Badge tone="purple">{ss.mode}</Badge>
                   <SessionBadge s={ss.status} />
                   <span className="small muted mono">{ss.startKey}</span>

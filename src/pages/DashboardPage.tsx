@@ -1,17 +1,20 @@
 import { useStore, sessionPlayers, sessionRisk, repurchaseRanking } from '../store'
+import { DEMO_DATE } from '../seed'
 import { Badge, SessionBadge, Stars } from '../ui'
 
 export function DashboardPage({ onOpenSession }: { onOpenSession: (id: string) => void }) {
   const st = useStore()
   const active = st.sessions.filter((s) => !['已解散', '已复盘'].includes(s.status))
-  const todaySs = active.filter((s) => s.date === '2026-09-23')
-  const forming = todaySs.filter((s) => !sessionRisk(s).formed)
+  const todaySs = active.filter((s) => s.date === DEMO_DATE)
+  const forming = todaySs.filter((s) => !sessionRisk(s).formed && s.status !== '改期待补')
   const noHost = todaySs.filter((s) => !s.hostId)
   const unpaidSs = todaySs.filter((s) => sessionPlayers(s.id).some((p) => !p.paid))
   const riskSs = todaySs.filter((s) => sessionRisk(s).refundAtRisk > 0 || sessionRisk(s).openTickets.length > 0)
+  const openCases = st.cases.filter((c) => !['已改期', '已退款', '已保留权益', '已关闭'].includes(c.status))
+  const pendingConfirm = st.plans.filter((p) => ['玩家确认中', '满足执行条件'].includes(p.status))
 
   const todayRevenue = st.ledger
-    .filter((l) => l.sessionId && st.sessions.find((x) => x.id === l.sessionId)?.date === '2026-09-23')
+    .filter((l) => l.sessionId && st.sessions.find((x) => x.id === l.sessionId)?.date === DEMO_DATE)
     .reduce((n, l) => n + l.amount, 0)
   const refundExposure = todaySs.reduce((n, s) => n + sessionRisk(s).refundAtRisk, 0)
 
@@ -25,14 +28,35 @@ export function DashboardPage({ onOpenSession }: { onOpenSession: (id: string) =
 
   return (
     <div>
-      <div className="section-title" style={{ marginTop: 0 }}>📊 店长看板 · 2026-09-23</div>
-      <div className="muted small" style={{ marginBottom: 10 }}>一屏掌握：人数是否成局、主持是否熟练、房间是否空闲、玩家是否已支付、退款风险敞口。</div>
+      <div className="section-title" style={{ marginTop: 0 }}>📊 店长看板 · {DEMO_DATE}（多店）</div>
+      <div className="muted small" style={{ marginBottom: 10 }}>一屏掌握：开场前异常处置、人数是否成局、主持是否熟练、房间是否空闲、玩家是否已支付、退款风险敞口。</div>
+
+      {openCases.length > 0 && (
+        <div className="card clickable" style={{ borderColor: 'var(--red)', marginBottom: 12, cursor: 'pointer' }}
+          onClick={() => window.dispatchEvent(new Event('nav:disruption'))}>
+          <div className="spread">
+            <div className="row">
+              <b style={{ color: '#ffc4c4' }}>🚨 需人工介入：{openCases.length} 张开场前异常单</b>
+              {pendingConfirm.map((p) => <Badge key={p.id} tone="amber">方案「{p.title.slice(0, 12)}…」{p.status}</Badge>)}
+            </div>
+            <button className="btn danger sm">进入异常改期中心 →</button>
+          </div>
+          <div className="stack" style={{ marginTop: 8 }}>
+            {openCases.map((c) => (
+              <div key={c.id} className="small">
+                <Badge tone="red">{c.type}</Badge> <b>{c.title}</b>
+                <span className="muted"> · {st.stores.find((x) => x.id === c.storeId)?.shortName} · 场次 {c.sessionId} · 状态：{c.status}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
 
       <div className="grid cols-4">
+        <div className="stat"><div className="v" style={{ color: openCases.length ? 'var(--red)' : undefined }}>{openCases.length}</div><div className="l">开场前异常处置中</div><div className="sub muted">{pendingConfirm.length} 个方案待确认/执行</div></div>
         <div className="stat"><div className="v">{todaySs.length}</div><div className="l">当日场次</div><div className="sub muted">{forming.length} 场人数未成局</div></div>
         <div className="stat"><div className="v" style={{ color: noHost.length ? 'var(--red)' : 'var(--green)' }}>{noHost.length}</div><div className="l">主持空缺场次</div><div className="sub muted">{todaySs.filter((s) => s.hostId && (st.hosts.find((h) => h.id === s.hostId)?.proficiency[s.scriptId] ?? 0) < 3).length} 场熟练度不足</div></div>
-        <div className="stat"><div className="v" style={{ color: unpaidSs.length ? 'var(--amber)' : 'var(--green)' }}>{unpaidSs.length}</div><div className="l">存在未支付玩家的场次</div></div>
-        <div className="stat"><div className="v amt-neg">¥{refundExposure}</div><div className="l">退款风险敞口（已付可能退）</div><div className="sub" style={{ color: 'var(--green)' }}>当日流水净额 ¥{todayRevenue}</div></div>
+        <div className="stat"><div className="v" style={{ color: unpaidSs.length ? 'var(--amber)' : 'var(--green)' }}>{unpaidSs.length}</div><div className="l">存在未支付玩家的场次</div><div className="sub" style={{ color: 'var(--green)' }}>当日流水净额 ¥{todayRevenue} · 敞口 ¥{refundExposure}</div></div>
       </div>
 
       <div className="grid cols-2" style={{ marginTop: 14 }}>
@@ -65,13 +89,15 @@ export function DashboardPage({ onOpenSession }: { onOpenSession: (id: string) =
         </div>
 
         <div className="card">
-          <div className="card-title-row"><h3 style={{ margin: 0 }}>🚪 房间占用 & 主持档期</h3></div>
+          <div className="card-title-row"><h3 style={{ margin: 0 }}>🚪 多店房间占用 & 主持档期</h3></div>
           <div className="stack" style={{ gap: 6 }}>
             {rooms.map(({ room, sessions }) => (
               <div key={room.id} className="spread small">
-                <span>{room.name} <span className="muted">({room.capacity}人{room.horrorSet ? '·恐怖实景' : ''})</span></span>
+                <span>{st.stores.find((x) => x.id === room.storeId)?.shortName} · {room.name} <span className="muted">({room.capacity}人{room.horrorSet ? '·恐怖实景' : ''})</span>
+                  {room.outages.length > 0 && <Badge tone="red">故障停用 {room.outages[0].startAt.slice(11, 16)}-{room.outages[0].endAt.slice(11, 16)}</Badge>}
+                </span>
                 <span>{sessions.length === 0 ? <Badge tone="green">空闲</Badge>
-                  : sessions.map((s) => <Badge key={s.id} tone="blue">{s.startKey} {st.scripts.find((x) => x.id === s.scriptId)?.name}</Badge>)}</span>
+                  : sessions.map((s) => <Badge key={s.id} tone={s.status === '改期待补' ? 'amber' : 'blue'}>{s.startKey} {st.scripts.find((x) => x.id === s.scriptId)?.name}{s.status === '改期待补' ? '·改期待补' : ''}</Badge>)}</span>
               </div>
             ))}
           </div>

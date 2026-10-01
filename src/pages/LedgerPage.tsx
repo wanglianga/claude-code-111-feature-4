@@ -10,6 +10,7 @@ const KIND_TONE: Record<LedgerKind, 'green' | 'red' | 'gold' | 'blue' | 'amber'>
   退款支出: 'red',
   换本差价: 'amber',
   争议补偿: 'red',
+  异常补偿: 'gold',
 }
 
 export function LedgerPage() {

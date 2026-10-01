@@ -10,6 +10,7 @@ export function Badge({ tone, children }: { tone?: 'red' | 'amber' | 'green' | '
 const sessionTone: Record<SessionStatus, 'amber' | 'green' | 'blue' | 'purple' | 'red' | 'gold'> = {
   待成局: 'amber',
   已成局: 'green',
+  改期待补: 'amber',
   已签到: 'blue',
   角色已分: 'purple',
   道具已发: 'purple',
